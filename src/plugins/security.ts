@@ -17,11 +17,12 @@ export async function registerSecurity(app: FastifyInstance, env: Env): Promise<
     global: true,
     max: env.RATE_LIMIT_MAX,
     timeWindow: env.RATE_LIMIT_WINDOW,
+    // The built error flows through our error handler, which wraps it into
+    // the { error: { code, message } } envelope with code RATE_LIMITED.
     errorResponseBuilder: (_request, context) => ({
-      error: {
-        code: "RATE_LIMITED",
-        message: `Rate limit exceeded, retry in ${context.after}`
-      }
+      statusCode: 429,
+      code: "RATE_LIMITED",
+      message: `Rate limit exceeded, retry in ${context.after}`
     })
   });
 }
