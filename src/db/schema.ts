@@ -82,3 +82,42 @@ export const mandates = sqliteTable("mandates", {
   createdAt: integer("created_at").notNull(),
   updatedAt: integer("updated_at").notNull()
 });
+
+// ---------------------------------------------------------------------------
+// Sealed bids & awards
+// ---------------------------------------------------------------------------
+
+export const BID_STATUSES = ["pending", "withdrawn", "awarded", "rejected"] as const;
+export type BidStatus = (typeof BID_STATUSES)[number];
+
+export const bids = sqliteTable("bids", {
+  id: text("id").primaryKey(),
+  mandateId: text("mandate_id")
+    .notNull()
+    .references(() => mandates.id),
+  operatorKey: text("operator_key")
+    .notNull()
+    .references(() => identities.publicKey),
+  /** Commitment to the sealed bid contents. */
+  bidCommitment: text("bid_commitment").notNull().unique(),
+  /** Nullifier preventing duplicate/replayed bids by one operator. */
+  bidNullifier: text("bid_nullifier").notNull().unique(),
+  /** Class B ciphertext: sealed bid, readable only by the principal client-side. */
+  encryptedBidCiphertext: text("encrypted_bid_ciphertext").notNull(),
+  encryptedBidNonce: text("encrypted_bid_nonce").notNull(),
+  status: text("status").$type<BidStatus>().notNull().default("pending"),
+  createdAt: integer("created_at").notNull(),
+  updatedAt: integer("updated_at").notNull()
+});
+
+export const awards = sqliteTable("awards", {
+  mandateId: text("mandate_id")
+    .primaryKey()
+    .references(() => mandates.id),
+  bidId: text("bid_id")
+    .notNull()
+    .references(() => bids.id),
+  awardedAt: integer("awarded_at").notNull(),
+  /** Set when the awarded operator accepts and execution begins. */
+  acceptedAt: integer("accepted_at")
+});
