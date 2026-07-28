@@ -190,3 +190,39 @@ export const evaluations = sqliteTable("evaluations", {
   attestation: text("attestation").notNull(),
   createdAt: integer("created_at").notNull()
 });
+
+// ---------------------------------------------------------------------------
+// Vault settlements & disputes
+// ---------------------------------------------------------------------------
+
+export const settlements = sqliteTable("settlements", {
+  mandateId: text("mandate_id")
+    .primaryKey()
+    .references(() => mandates.id),
+  /** Nullifier guaranteeing settlement happens exactly once. */
+  settlementNullifier: text("settlement_nullifier").notNull().unique(),
+  /** Optional commitment to the settled amount (never the amount itself). */
+  amountCommitment: text("amount_commitment"),
+  settledAt: integer("settled_at").notNull()
+});
+
+export const DISPUTE_STATUSES = ["open", "ruled"] as const;
+export type DisputeStatus = (typeof DISPUTE_STATUSES)[number];
+
+export const DISPUTE_OUTCOMES = ["release", "refund"] as const;
+export type DisputeOutcome = (typeof DISPUTE_OUTCOMES)[number];
+
+export const disputes = sqliteTable("disputes", {
+  id: text("id").primaryKey(),
+  mandateId: text("mandate_id")
+    .notNull()
+    .references(() => mandates.id),
+  openedBy: text("opened_by").notNull(),
+  /** Commitment to the evidence capsule backing the dispute. */
+  disputeCommitment: text("dispute_commitment").notNull(),
+  status: text("status").$type<DisputeStatus>().notNull().default("open"),
+  rulingCommitment: text("ruling_commitment"),
+  outcome: text("outcome").$type<DisputeOutcome>(),
+  ruledAt: integer("ruled_at"),
+  createdAt: integer("created_at").notNull()
+});
