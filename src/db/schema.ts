@@ -154,3 +154,39 @@ export const workroomArtifacts = sqliteTable("workroom_artifacts", {
   nonce: text("nonce").notNull(),
   createdAt: integer("created_at").notNull()
 });
+
+// ---------------------------------------------------------------------------
+// Submissions & evaluations
+// ---------------------------------------------------------------------------
+
+export const submissions = sqliteTable("submissions", {
+  id: text("id").primaryKey(),
+  mandateId: text("mandate_id")
+    .notNull()
+    .references(() => mandates.id),
+  artifactId: text("artifact_id")
+    .notNull()
+    .references(() => workroomArtifacts.id),
+  /** Commitment anchoring the submission to the mandate. */
+  submissionCommitment: text("submission_commitment").notNull(),
+  /** Digest of the submitted artifact plaintext. */
+  digest: text("digest").notNull(),
+  submittedAt: integer("submitted_at").notNull()
+});
+
+export const EVALUATION_VERDICTS = ["accept", "reject", "revise"] as const;
+export type EvaluationVerdict = (typeof EVALUATION_VERDICTS)[number];
+
+export const evaluations = sqliteTable("evaluations", {
+  id: text("id").primaryKey(),
+  mandateId: text("mandate_id")
+    .notNull()
+    .references(() => mandates.id),
+  evaluatorKey: text("evaluator_key").notNull(),
+  verdict: text("verdict").$type<EvaluationVerdict>().notNull(),
+  /** Commitment to the private evaluation notes. */
+  evaluationCommitment: text("evaluation_commitment").notNull(),
+  /** Signed attestation blob from the evaluator (opaque to the server). */
+  attestation: text("attestation").notNull(),
+  createdAt: integer("created_at").notNull()
+});
