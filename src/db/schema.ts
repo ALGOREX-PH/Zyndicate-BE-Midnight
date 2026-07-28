@@ -226,3 +226,37 @@ export const disputes = sqliteTable("disputes", {
   ruledAt: integer("ruled_at"),
   createdAt: integer("created_at").notNull()
 });
+
+// ---------------------------------------------------------------------------
+// Proof receipts & passport credentials
+// ---------------------------------------------------------------------------
+
+export const RECEIPT_KINDS = ["completion", "payment", "evaluation"] as const;
+export type ReceiptKind = (typeof RECEIPT_KINDS)[number];
+
+export const receipts = sqliteTable("receipts", {
+  id: text("id").primaryKey(),
+  mandateId: text("mandate_id")
+    .notNull()
+    .references(() => mandates.id),
+  holderKey: text("holder_key").notNull(),
+  kind: text("kind").$type<ReceiptKind>().notNull(),
+  /** Commitment mirror; the receipt opening lives with the holder. */
+  receiptCommitment: text("receipt_commitment").notNull(),
+  issuedAt: integer("issued_at").notNull()
+});
+
+export const credentials = sqliteTable("credentials", {
+  id: text("id").primaryKey(),
+  passportKey: text("passport_key")
+    .notNull()
+    .references(() => identities.publicKey),
+  /** Coarse public domain of the capability, e.g. "security". */
+  domain: text("domain").notNull(),
+  /** Credential kind, e.g. "capability", "institutional", "certification". */
+  kind: text("kind").notNull(),
+  /** Commitment to the full credential; contents stay with the holder. */
+  commitment: text("commitment").notNull(),
+  revokedAt: integer("revoked_at"),
+  issuedAt: integer("issued_at").notNull()
+});
