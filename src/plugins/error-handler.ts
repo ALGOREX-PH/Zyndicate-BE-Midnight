@@ -44,8 +44,11 @@ export function registerErrorHandler(app: FastifyInstance): void {
         .send(envelope("INTERNAL_ERROR", "Response serialization failed"));
     }
 
+    const known = err as { statusCode?: unknown; code?: unknown; message?: unknown };
     const statusCode =
-      typeof err.statusCode === "number" && err.statusCode >= 400 ? err.statusCode : 500;
+      typeof known.statusCode === "number" && known.statusCode >= 400
+        ? known.statusCode
+        : 500;
 
     if (statusCode >= 500) {
       request.log.error({ err }, "unhandled error");
@@ -59,8 +62,11 @@ export function registerErrorHandler(app: FastifyInstance): void {
           ? "UNAUTHORIZED"
           : statusCode === 404
             ? "NOT_FOUND"
-            : (err.code ?? "REQUEST_ERROR");
-    return reply.status(statusCode).send(envelope(code, err.message));
+            : typeof known.code === "string"
+              ? known.code
+              : "REQUEST_ERROR";
+    const message = typeof known.message === "string" ? known.message : "Request error";
+    return reply.status(statusCode).send(envelope(code, message));
   });
 
   app.setNotFoundHandler((_request, reply) => {
