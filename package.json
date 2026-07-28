@@ -1,0 +1,44 @@
+{
+  "name": "zyndicate-backend",
+  "version": "0.1.0",
+  "description": "Zyndicate coordination service - the sealed market for trusted digital work. Stores public mandate summaries, client-side-encrypted payloads, and commitment/nullifier mirrors. Never sees plaintext secrets.",
+  "type": "module",
+  "private": true,
+  "engines": {
+    "node": ">=22"
+  },
+  "scripts": {
+    "dev": "tsx watch src/index.ts",
+    "build": "tsc",
+    "start": "node dist/index.js",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "lint": "eslint ."
+  },
+  "dependencies": {
+    "@fastify/cors": "^11.1.0",
+    "@fastify/helmet": "^13.0.2",
+    "@fastify/rate-limit": "^10.3.0",
+    "@fastify/swagger": "^9.5.2",
+    "@fastify/swagger-ui": "^5.2.3",
+    "@noble/curves": "^1.9.2",
+    "better-sqlite3": "^12.2.0",
+    "drizzle-orm": "^0.44.4",
+    "fastify": "^5.4.0",
+    "fastify-type-provider-zod": "^5.0.2",
+    "jose": "^6.0.12",
+    "nanoid": "^5.1.5",
+    "pino": "^9.7.0",
+    "zod": "^4.0.14"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.32.0",
+    "@types/better-sqlite3": "^7.6.13",
+    "@types/node": "^22.16.5",
+    "eslint": "^9.32.0",
+    "tsx": "^4.20.3",
+    "typescript": "^5.9.2",
+    "typescript-eslint": "^8.38.0",
+    "vitest": "^3.2.4"
+  }
+}
