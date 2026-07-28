@@ -121,3 +121,36 @@ export const awards = sqliteTable("awards", {
   /** Set when the awarded operator accepts and execution begins. */
   acceptedAt: integer("accepted_at")
 });
+
+// ---------------------------------------------------------------------------
+// Workrooms
+// ---------------------------------------------------------------------------
+
+export const workroomMessages = sqliteTable("workroom_messages", {
+  id: text("id").primaryKey(),
+  mandateId: text("mandate_id")
+    .notNull()
+    .references(() => mandates.id),
+  senderKey: text("sender_key").notNull(),
+  /** Class B ciphertext: message body encrypted client-side for participants. */
+  ciphertext: text("ciphertext").notNull(),
+  nonce: text("nonce").notNull(),
+  createdAt: integer("created_at").notNull()
+});
+
+export const workroomArtifacts = sqliteTable("workroom_artifacts", {
+  id: text("id").primaryKey(),
+  mandateId: text("mandate_id")
+    .notNull()
+    .references(() => mandates.id),
+  uploaderKey: text("uploader_key").notNull(),
+  /** Display name only; contents live in the ciphertext blob. */
+  name: text("name").notNull(),
+  /** Plain digest of the plaintext artifact for integrity checking. */
+  digest: text("digest").notNull(),
+  version: integer("version").notNull().default(1),
+  /** Class B ciphertext: artifact contents encrypted client-side. */
+  ciphertext: text("ciphertext").notNull(),
+  nonce: text("nonce").notNull(),
+  createdAt: integer("created_at").notNull()
+});
