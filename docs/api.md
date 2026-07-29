@@ -285,7 +285,7 @@ Optional auth. Discovery over Class A summaries.
 | `state` | one of the eleven mandate states | any |
 | `mine` | boolean-ish (`true`, `false`, `1`, `0`) | false |
 
-Public listings exclude `draft` and `invitation` mandates entirely. `mine=true` requires a session and returns the caller's own mandates including drafts; without a token it is `401 UNAUTHORIZED`. Public listings are served from a 5-second in-memory cache that is cleared on any mandate write.
+Public listings exclude `draft` and `invitation` mandates entirely. `mine=true` requires a session and is **party-scoped**: it returns every mandate the caller is a party to — commissioned as principal, bid on as operator, or designated on as evaluator — including drafts they own. Operators depend on this to reach the workrooms and vaults of mandates they are executing. Without a token it is `401 UNAUTHORIZED`. Public listings are served from a 5-second in-memory cache that is cleared on any mandate write.
 
 ```json
 {
