@@ -105,3 +105,46 @@ Thirteen SQLite tables, created idempotently on boot (`src/db/client.ts`).
 | `credentials` | Passport credential commitments by domain and kind, with optional revocation timestamp |
 
 Indexes cover mandate state/domain/principal, bids by mandate and operator, workroom rows by mandate, submissions and evaluations and disputes by mandate, receipts by holder, and credentials by passport.
+
+---
+
+## Endpoints
+
+All application routes are served under `/api/v1`. Health and documentation routes sit at the root. `Bearer` means a valid session JWT is required; `optional` means the route responds to anonymous callers but widens its response for a recognised participant.
+
+| Method | Path | Auth | Purpose |
+| --- | --- | --- | --- |
+| GET | `/healthz` | none | Liveness probe |
+| GET | `/readyz` | none | Readiness probe; runs `SELECT 1`, returns 503 if the database is unavailable |
+| GET | `/metrics` | none | JSON request/error counters, total and per module |
+| GET | `/docs` | none | Swagger UI (OpenAPI document at `/docs/json`) |
+| POST | `/api/v1/auth/challenge` | none | Issue a single-use nonce for an ed25519 public key (auth rate limit) |
+| POST | `/api/v1/auth/verify` | none | Verify the signed challenge, register the identity, return a session JWT (auth rate limit) |
+| GET | `/api/v1/me` | Bearer | Current identity |
+| PUT | `/api/v1/me` | Bearer | Update display name and role hints |
+| GET | `/api/v1/me/receipts` | Bearer | Proof receipts held by the caller, newest first |
+| GET | `/api/v1/passports/:publicKey` | none | Coarse public passport: identity class, qualified domains, completion band |
+| POST | `/api/v1/passports/credentials` | Bearer | Register a credential commitment on the caller's passport |
+| GET | `/api/v1/mandates` | optional | Discover mandates as Class A summaries; `mine=true` requires authentication |
+| POST | `/api/v1/mandates` | Bearer | Create a mandate in `draft` from summary, commitments, and encrypted package |
+| GET | `/api/v1/mandates/:id` | optional | Role-aware detail; drafts and invitation-only mandates 404 for outsiders |
+| POST | `/api/v1/mandates/:id/state` | Bearer (principal) | `open_bidding`, `close_bidding`, or `cancel` |
+| POST | `/api/v1/mandates/:id/award` | Bearer (principal) | Select the winning sealed bid; other pending bids are rejected |
+| POST | `/api/v1/mandates/:id/accept` | Bearer (awarded operator) | Accept the award; execution begins |
+| POST | `/api/v1/mandates/:id/bids` | Bearer | Submit a sealed bid (commitment + nullifier + ciphertext) |
+| GET | `/api/v1/mandates/:id/bids` | Bearer | Principal sees every bid; an operator sees only their own |
+| DELETE | `/api/v1/mandates/:id/bids/:bidId` | Bearer (bid owner) | Withdraw an own pending bid |
+| GET | `/api/v1/workrooms/:mandateId` | Bearer (participant) | Workroom metadata and member roles |
+| GET | `/api/v1/workrooms/:mandateId/messages` | Bearer (participant) | Paginated encrypted messages, oldest first |
+| POST | `/api/v1/workrooms/:mandateId/messages` | Bearer (participant) | Post an encrypted message |
+| GET | `/api/v1/workrooms/:mandateId/artifacts` | Bearer (participant) | Paginated encrypted artifacts, oldest first |
+| POST | `/api/v1/workrooms/:mandateId/artifacts` | Bearer (participant) | Upload an encrypted artifact with digest and version |
+| POST | `/api/v1/mandates/:id/submissions` | Bearer (awarded operator) | Commit a submission against a workroom artifact; state becomes `submitted` |
+| POST | `/api/v1/mandates/:id/evaluations` | Bearer (evaluator, or principal when none is designated) | Record an attestation; `accept` and `revise` drive the state machine |
+| POST | `/api/v1/mandates/:id/settle` | Bearer (principal) | Release settlement exactly once and auto-issue proof receipts |
+| GET | `/api/v1/vault/:mandateId` | Bearer (mandate party) | Settlement status; non-parties get 404 |
+| POST | `/api/v1/mandates/:id/disputes` | Bearer (principal or awarded operator) | Open a dispute; settlement freezes |
+| POST | `/api/v1/disputes/:id/ruling` | Bearer (tribunal) | Rule `release` or `refund`; mandate becomes `resolved` |
+| GET | `/api/v1/disputes` | Bearer | Disputes the caller participates in |
+
+Detailed request and response shapes, the error envelope, and a full lifecycle walkthrough live in [`docs/api.md`](docs/api.md).
