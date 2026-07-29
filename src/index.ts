@@ -1,6 +1,19 @@
+import { existsSync } from "node:fs";
+import { resolve } from "node:path";
 import { buildApp } from "./app.js";
 
+/**
+ * Load `.env` before any configuration is read. Node's built-in loader keeps
+ * the runtime dependency-free and never overwrites variables that are already
+ * present in the process environment, so real deployment secrets always win.
+ */
+function loadDotEnv(): void {
+  const path = resolve(process.cwd(), process.env.ENV_FILE ?? ".env");
+  if (existsSync(path)) process.loadEnvFile(path);
+}
+
 async function main(): Promise<void> {
+  loadDotEnv();
   const app = await buildApp();
   const port = app.env.PORT;
 
