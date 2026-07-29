@@ -202,3 +202,19 @@ Rules that ride alongside the machine:
 - A `reject` verdict is recorded as an attestation without changing state: the covenant may allow another round, or a party may open a dispute.
 - Settlement is frozen while a dispute is open, refuses a second settlement (`409 ALREADY_SETTLED`), and refuses a reused settlement nullifier (`409 DUPLICATE_NULLIFIER`).
 - `settled`, `cancelled`, and `resolved` are terminal.
+
+---
+
+## Security
+
+- **ed25519 challenge-response authentication.** No passwords and no server-held secrets per user. A caller asks for a nonce, signs the UTF-8 message `zyndicate:auth:<nonce>` with the private key that never leaves their device, and the server verifies with `@noble/curves`. Challenges expire after five minutes, are single-use (`consumedAt`), are bound to the requesting public key, and expired rows are swept opportunistically. A first successful verification registers the identity, so account creation is just proof of key possession.
+- **JWT sessions.** HS256 tokens signed with `JWT_SECRET`, issuer `zyndicate`, subject the lowercase public key, 24 hour expiry. `authenticate` rejects anything missing or invalid with `401 UNAUTHORIZED`; `optionalAuthenticate` attaches the caller when a valid token is present and otherwise leaves the request anonymous. Verification failures never distinguish expired from forged.
+- **Boot-time secret guard.** `NODE_ENV=production` with the built-in development secret refuses to start, so a misconfigured deployment cannot run on a publicly known signing key.
+- **Rate limits.** A global limit (`RATE_LIMIT_MAX` per `RATE_LIMIT_WINDOW`) with a much tighter limit on `/auth/challenge` and `/auth/verify` (`RATE_LIMIT_AUTH_MAX`) to blunt signature-grinding and nonce farming. Exceeding a limit returns the standard envelope with code `RATE_LIMITED`.
+- **Helmet.** Default hardening headers on every response.
+- **CORS allowlist.** Origins come from `CORS_ORIGINS` as an explicit comma-separated list, with credentials enabled. There is no wildcard default.
+- **pino redaction.** Authorization and cookie headers plus every ciphertext, nonce, signature, token, and encrypted payload path are replaced with `[REDACTED]` before a log line is written.
+- **404-not-403 discipline for confidential resources.** Non-participants receive `404 NOT_FOUND` rather than `403 FORBIDDEN` for drafts, invitation-only mandates, workrooms, vaults, and bids they do not own, so a probing client cannot enumerate what exists. `403` is reserved for cases where the caller is already a known participant but lacks authority for that specific action, which leaks nothing new.
+- **Nullifier uniqueness.** Bid nullifiers, bid commitments, and settlement nullifiers are unique at the database level, so replay and double settlement fail closed even under concurrency.
+- **Body limit and strict validation.** A 2 MB body limit, and every request is parsed by a zod schema before a handler runs. Public keys must be 64 hex characters, signatures 128, and encrypted payloads must be base64.
+- **Foreign keys and WAL.** SQLite runs with `foreign_keys = ON` and write-ahead logging.
