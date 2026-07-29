@@ -36,7 +36,11 @@ export async function buildApp(options: BuildAppOptions = {}): Promise<FastifyIn
 
   const app = Fastify({
     logger: buildLoggerOptions(env.LOG_LEVEL),
-    bodyLimit: 2 * 1024 * 1024
+    bodyLimit: 2 * 1024 * 1024,
+    // Behind Render/Fly/a reverse proxy the client IP arrives in
+    // X-Forwarded-For; without this the rate limiter buckets every caller
+    // together under the proxy's address.
+    trustProxy: env.trustProxy
   }).withTypeProvider<ZodTypeProvider>();
 
   app.setValidatorCompiler(validatorCompiler);
