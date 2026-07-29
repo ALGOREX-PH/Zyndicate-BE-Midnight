@@ -272,6 +272,14 @@ Ten files covering auth, mandates, bids, workrooms, evaluations, vault, disputes
 npm test
 ```
 
+### Deploying
+
+The service is stateful: SQLite writes to a file that must survive restarts, so a Render deploy
+needs a mounted disk with `DATABASE_PATH` pointing inside it. [`render.yaml`](render.yaml) is a
+ready blueprint. Set `NODE_ENV=production` (which refuses the development signing secret and turns
+on proxy trust, so rate limiting keys on the real client IP) and list the frontend's origin in
+`CORS_ORIGINS`. Full walkthrough: **[docs/deployment.md](docs/deployment.md)**.
+
 ---
 
 ## Vocabulary
