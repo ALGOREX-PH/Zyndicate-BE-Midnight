@@ -168,3 +168,267 @@ List endpoints that can grow without bound (`GET /mandates`, workroom messages, 
 `page` defaults to 1 (minimum 1), `pageSize` defaults to 20 (maximum 100). `totalPages` is never below 1. Mandates are returned newest first; workroom messages and artifacts oldest first, so a workroom reads as a transcript.
 
 Small, naturally bounded lists (`GET /mandates/:id/bids`, `GET /disputes`, `GET /me/receipts`) return `{ "items": [...] }` without pagination fields.
+
+---
+
+## Identity
+
+### `POST /api/v1/auth/challenge`
+
+Public. Body: `publicKey` (hex 64). Returns `200 { nonce, expiresAt }`. See the authentication flow above.
+
+### `POST /api/v1/auth/verify`
+
+Public. Body: `publicKey` (hex 64), `nonce` (16 to 128 characters), `signature` (hex 128). Returns `200 { token, identity }`. Errors: `401 UNAUTHORIZED`.
+
+### `GET /api/v1/me`
+
+Bearer. Returns the caller's identity.
+
+```json
+{
+  "identity": {
+    "publicKey": "85ef9b03...affee",
+    "displayName": "Northwind Security",
+    "roleHints": ["principal"],
+    "createdAt": 1785289647774
+  }
+}
+```
+
+### `PUT /api/v1/me`
+
+Bearer. Updates public profile metadata. Both fields are optional; omitting one leaves it untouched.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `displayName` | string (1 to 80) or `null` | `null` clears it |
+| `roleHints` | array of `principal` \| `operator` \| `evaluator`, max 3 | Self-declared hints only; they grant no authority |
+
+Returns `200 { identity }`. Role hints are advisory: every actual permission on a mandate is derived from `principalKey`, the awarded bid's `operatorKey`, and `evaluatorKey`.
+
+### `GET /api/v1/me/receipts`
+
+Bearer. Proof receipts held by the caller, newest first.
+
+```json
+{
+  "items": [
+    {
+      "id": "rcp_9pQ2...",
+      "mandateId": "man_cIsg4ALNl86D7b1x5OuOa",
+      "holderKey": "85ef9b03...affee",
+      "kind": "completion",
+      "receiptCommitment": "0f3c...",
+      "issuedAt": 1785289999000
+    }
+  ]
+}
+```
+
+`kind` is `completion`, `payment`, or `evaluation`. The receipt is a commitment mirror; the opening stays with the holder.
+
+---
+
+## Passports
+
+### `GET /api/v1/passports/:publicKey`
+
+Public. The coarse passport, and nothing more: no counterparties, no mandate history, no raw counts.
+
+```json
+{
+  "passport": {
+    "publicKey": "7c1d...9a4b",
+    "identityClass": "credentialed_operator",
+    "domains": ["security", "data-analysis"],
+    "completionBand": "established",
+    "activeSince": 1785200000000
+  }
+}
+```
+
+| Field | Meaning |
+| --- | --- |
+| `identityClass` | `credentialed_operator` when at least one unrevoked credential exists, otherwise `registered` |
+| `domains` | Sorted, de-duplicated domains of unrevoked credentials |
+| `completionBand` | `none` (0), `emerging` (1 to 2), `established` (3 to 9), `high` (10 or more) completion receipts |
+| `activeSince` | When the identity first authenticated |
+
+Returns `404 NOT_FOUND` for a key that has never authenticated.
+
+### `POST /api/v1/passports/credentials`
+
+Bearer. Registers a credential commitment on the caller's own passport. The credential contents stay with the holder; the server stores only the commitment.
+
+| Field | Type |
+| --- | --- |
+| `domain` | string, 2 to 64, for example `security` |
+| `kind` | string, 2 to 64, for example `capability`, `institutional`, `certification` |
+| `commitment` | commitment string |
+
+Returns `201 { credential: { id, passportKey, domain, kind, commitment, revokedAt, issuedAt } }`.
+
+---
+
+## Mandates
+
+### `GET /api/v1/mandates`
+
+Optional auth. Discovery over Class A summaries.
+
+| Query | Type | Default |
+| --- | --- | --- |
+| `page` | integer, min 1 | 1 |
+| `pageSize` | integer, 1 to 100 | 20 |
+| `domain` | string, 1 to 64 | any |
+| `state` | one of the eleven mandate states | any |
+| `mine` | boolean-ish (`true`, `false`, `1`, `0`) | false |
+
+Public listings exclude `draft` and `invitation` mandates entirely. `mine=true` requires a session and returns the caller's own mandates including drafts; without a token it is `401 UNAUTHORIZED`. Public listings are served from a 5-second in-memory cache that is cleared on any mandate write.
+
+```json
+{
+  "items": [
+    {
+      "id": "man_cIsg4ALNl86D7b1x5OuOa",
+      "publicDomain": "security",
+      "complexityBand": "high",
+      "discoveryMode": "open",
+      "state": "open_for_bids",
+      "bidDeadline": 1785500000000,
+      "executionDeadline": 1786000000000,
+      "mandateCommitment": "9f2a...",
+      "covenantCommitment": "41bd...",
+      "rewardBand": "band-3",
+      "chainAddress": null,
+      "createdAt": 1785289700000,
+      "updatedAt": 1785289800000
+    }
+  ],
+  "page": 1,
+  "pageSize": 20,
+  "total": 1,
+  "totalPages": 1
+}
+```
+
+The summary never contains the principal's key or any ciphertext.
+
+### `POST /api/v1/mandates`
+
+Bearer. Creates a mandate in `draft`.
+
+| Field | Type | Required | Notes |
+| --- | --- | --- | --- |
+| `publicDomain` | string, 2 to 64 | yes | Class A coarse domain |
+| `complexityBand` | string, 1 to 32 | no | Class A band, never the budget |
+| `discoveryMode` | `open` \| `gated` \| `invitation` | no, default `open` | `invitation` mandates are excluded from public listings |
+| `bidDeadline` | epoch ms or ISO-8601 | no | Enforced when bids arrive |
+| `executionDeadline` | epoch ms or ISO-8601 | no | Recorded, not enforced by the server |
+| `mandateCommitment` | commitment | yes | Binds the full private mandate package |
+| `covenantCommitment` | commitment | yes | Binds the covenant |
+| `encryptedPackage` | `{ ciphertext, nonce }` | yes | Client-encrypted mandate package |
+| `rewardBand` | string, 1 to 64 | no | Coarse band only, when the covenant permits |
+| `chainAddress` | string, 1 to 128 | no | Optional on-chain contract mirror |
+| `evaluatorKey` | hex 64 | no | Designated evaluator; omit for principal-led evaluation |
+
+Returns `201 { mandate }` with the detail view for the creator.
+
+### `GET /api/v1/mandates/:id`
+
+Optional auth. Role-aware detail. Outsiders receive `404 NOT_FOUND` for `draft` and `invitation` mandates.
+
+```json
+{
+  "mandate": {
+    "id": "man_cIsg4ALNl86D7b1x5OuOa",
+    "publicDomain": "security",
+    "complexityBand": "high",
+    "discoveryMode": "open",
+    "state": "in_execution",
+    "bidDeadline": 1785500000000,
+    "executionDeadline": 1786000000000,
+    "mandateCommitment": "9f2a...",
+    "covenantCommitment": "41bd...",
+    "rewardBand": "band-3",
+    "chainAddress": null,
+    "createdAt": 1785289700000,
+    "updatedAt": 1785289900000,
+    "viewerRole": "principal",
+    "encryptedPackage": { "ciphertext": "base64...", "nonce": "base64..." },
+    "principalKey": "85ef9b03...affee",
+    "evaluatorKey": null,
+    "awardedBidId": "bid_7Kd1...",
+    "awardAcceptedAt": 1785289900000
+  }
+}
+```
+
+| Field | Who sees it |
+| --- | --- |
+| Summary fields, `viewerRole` | Everyone who can see the mandate at all |
+| `encryptedPackage` | Principal and awarded operator only |
+| `principalKey`, `evaluatorKey`, `awardedBidId`, `awardAcceptedAt` | Any participant (principal, awarded operator, evaluator) |
+
+`viewerRole` is `principal`, `operator`, `evaluator`, or `null`.
+
+### `POST /api/v1/mandates/:id/state`
+
+Bearer, principal only. Body: `{ "action": "open_bidding" | "close_bidding" | "cancel" }`. Returns `200 { mandate }`.
+
+Errors: `404` if the mandate does not exist or the caller is an outsider on a draft, `403 FORBIDDEN` for a non-principal on a visible mandate, `409 INVALID_STATE` for an illegal transition.
+
+### `POST /api/v1/mandates/:id/award`
+
+Bearer, principal only. Body: `{ "bidId": "bid_..." }`. Moves the mandate to `awarded`, marks the winning bid `awarded`, and marks every other pending bid on that mandate `rejected`. Legal from `open_for_bids` or `bidding_closed`.
+
+Errors: `404 NOT_FOUND` if the bid does not belong to this mandate, `409 BID_NOT_PENDING`, `409 INVALID_STATE`, `403 FORBIDDEN`.
+
+### `POST /api/v1/mandates/:id/accept`
+
+Bearer, awarded operator only. No body. Moves `awarded` to `in_execution` and stamps `awardAcceptedAt`. Errors: `403 FORBIDDEN`, `409 INVALID_STATE`.
+
+---
+
+## Sealed bids
+
+### `POST /api/v1/mandates/:id/bids`
+
+Bearer. Submits a sealed bid. The server checks the seal, never the contents.
+
+| Field | Type |
+| --- | --- |
+| `bidCommitment` | commitment, globally unique |
+| `bidNullifier` | commitment, globally unique |
+| `encryptedBid` | `{ ciphertext, nonce }` |
+
+Returns `201 { bid }`:
+
+```json
+{
+  "bid": {
+    "id": "bid_7Kd1...",
+    "mandateId": "man_cIsg...",
+    "operatorKey": "7c1d...9a4b",
+    "bidCommitment": "b1d0...",
+    "bidNullifier": "n0ll...",
+    "status": "pending",
+    "createdAt": 1785289750000,
+    "updatedAt": 1785289750000,
+    "encryptedBid": { "ciphertext": "base64...", "nonce": "base64..." }
+  }
+}
+```
+
+`status` is `pending`, `withdrawn`, `awarded`, or `rejected`.
+
+Errors: `403 FORBIDDEN` if the principal bids on their own mandate, `409 INVALID_STATE` if the mandate is not `open_for_bids`, `409 BID_WINDOW_CLOSED` past the deadline, `409 DUPLICATE_NULLIFIER` or `409 DUPLICATE_COMMITMENT` on reuse, `409 DUPLICATE_BID` if the operator already has a pending bid on this mandate (withdraw it first).
+
+### `GET /api/v1/mandates/:id/bids`
+
+Bearer. Returns `{ items: [...] }`. The principal receives every bid on the mandate; any other caller receives only their own rows. Ciphertext is included for the rows the caller is entitled to, and is decryptable only with keys the server does not have.
+
+### `DELETE /api/v1/mandates/:id/bids/:bidId`
+
+Bearer, bid owner only. Marks an own pending bid `withdrawn` and returns `200 { bid }`. A bid belonging to someone else returns `404 NOT_FOUND`, not `403`, so bid ids cannot be probed. A non-pending bid returns `409 BID_NOT_PENDING`.
