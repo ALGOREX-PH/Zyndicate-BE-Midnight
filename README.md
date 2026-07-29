@@ -125,7 +125,7 @@ All application routes are served under `/api/v1`. Health and documentation rout
 | GET | `/api/v1/me/receipts` | Bearer | Proof receipts held by the caller, newest first |
 | GET | `/api/v1/passports/:publicKey` | none | Coarse public passport: identity class, qualified domains, completion band |
 | POST | `/api/v1/passports/credentials` | Bearer | Register a credential commitment on the caller's passport |
-| GET | `/api/v1/mandates` | optional | Discover mandates as Class A summaries; `mine=true` requires authentication |
+| GET | `/api/v1/mandates` | optional | Discover mandates as Class A summaries; `mine=true` requires authentication and is party-scoped (principal, bidding operator, or evaluator) |
 | POST | `/api/v1/mandates` | Bearer | Create a mandate in `draft` from summary, commitments, and encrypted package |
 | GET | `/api/v1/mandates/:id` | optional | Role-aware detail; drafts and invitation-only mandates 404 for outsiders |
 | POST | `/api/v1/mandates/:id/state` | Bearer (principal) | `open_bidding`, `close_bidding`, or `cancel` |
