@@ -199,7 +199,20 @@ export function listMandates(
   if (filters.state) conditions.push(eq(mandates.state, filters.state));
 
   if (filters.mine && filters.viewerKey) {
-    conditions.push(eq(mandates.principalKey, filters.viewerKey));
+    // "Mine" means every mandate the caller is a party to — not just the ones
+    // they commissioned. An operator must be able to reach the workrooms and
+    // vaults of mandates they bid on or are executing.
+    const bidOn = db
+      .select({ mandateId: bids.mandateId })
+      .from(bids)
+      .where(eq(bids.operatorKey, filters.viewerKey));
+    conditions.push(
+      or(
+        eq(mandates.principalKey, filters.viewerKey),
+        eq(mandates.evaluatorKey, filters.viewerKey),
+        inArray(mandates.id, bidOn)
+      )!
+    );
   } else {
     // Public discovery: drafts and invitation-only mandates are not listed.
     conditions.push(ne(mandates.state, "draft"));
