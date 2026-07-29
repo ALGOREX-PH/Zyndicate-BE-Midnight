@@ -1,0 +1,37 @@
+# Render blueprint for the Zyndicate coordination service.
+# Create from the Render dashboard: New > Blueprint, point it at this repo.
+#
+# The disk is not optional. SQLite writes to a file, and Render's instance
+# filesystem is ephemeral — without a mounted disk every deploy and every
+# restart would silently reset the database.
+services:
+  - type: web
+    name: zyndicate-api
+    runtime: node
+    plan: starter # a disk cannot be attached to the free plan
+    region: oregon
+    branch: main
+    buildCommand: npm ci && npm run build
+    startCommand: npm start
+    healthCheckPath: /healthz
+    disk:
+      name: zyndicate-data
+      mountPath: /var/data
+      sizeGB: 1
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: DATABASE_PATH
+        value: /var/data/zyndicate.db
+      - key: JWT_SECRET
+        generateValue: true # Render generates a strong secret on first deploy
+      - key: CORS_ORIGINS
+        sync: false # set to your Vercel origin(s), comma separated
+      - key: LOG_LEVEL
+        value: info
+      - key: RATE_LIMIT_MAX
+        value: "120"
+      - key: RATE_LIMIT_AUTH_MAX
+        value: "10"
+      - key: TRIBUNAL_KEYS
+        sync: false
