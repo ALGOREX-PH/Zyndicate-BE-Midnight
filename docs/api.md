@@ -432,3 +432,251 @@ Bearer. Returns `{ items: [...] }`. The principal receives every bid on the mand
 ### `DELETE /api/v1/mandates/:id/bids/:bidId`
 
 Bearer, bid owner only. Marks an own pending bid `withdrawn` and returns `200 { bid }`. A bid belonging to someone else returns `404 NOT_FOUND`, not `403`, so bid ids cannot be probed. A non-pending bid returns `409 BID_NOT_PENDING`.
+
+---
+
+## Workrooms
+
+A workroom exists once a mandate is awarded. Its members are the principal, the awarded operator, and the designated evaluator if there is one. Every workroom route answers `404 NOT_FOUND` to anyone else, including before an award exists.
+
+### `GET /api/v1/workrooms/:mandateId`
+
+Bearer, participant only.
+
+```json
+{
+  "workroom": {
+    "mandateId": "man_cIsg...",
+    "state": "in_execution",
+    "createdAt": 1785289880000,
+    "members": [
+      { "publicKey": "85ef9b03...affee", "role": "principal" },
+      { "publicKey": "7c1d...9a4b", "role": "operator" }
+    ]
+  }
+}
+```
+
+`createdAt` is the award time: the moment the workroom came into being.
+
+### `GET /api/v1/workrooms/:mandateId/messages`
+
+Bearer, participant only. Accepts `page` and `pageSize`. Returns the paginated envelope, oldest first.
+
+```json
+{
+  "items": [
+    {
+      "id": "msg_3Ha8...",
+      "mandateId": "man_cIsg...",
+      "senderKey": "7c1d...9a4b",
+      "ciphertext": "base64...",
+      "nonce": "base64...",
+      "createdAt": 1785289890000
+    }
+  ],
+  "page": 1,
+  "pageSize": 20,
+  "total": 1,
+  "totalPages": 1
+}
+```
+
+### `POST /api/v1/workrooms/:mandateId/messages`
+
+Bearer, participant only. Body: `{ "ciphertext": base64, "nonce": base64 }`. Returns `201 { message }`. Encrypt for the workroom members before sending; the server stores the blob verbatim and never inspects it.
+
+### `GET /api/v1/workrooms/:mandateId/artifacts`
+
+Bearer, participant only. Same pagination as messages, oldest first. Each item is `{ id, mandateId, uploaderKey, name, digest, version, ciphertext, nonce, createdAt }`.
+
+### `POST /api/v1/workrooms/:mandateId/artifacts`
+
+Bearer, participant only.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `name` | string, 1 to 200 | Display name only. Contents live in the ciphertext |
+| `digest` | commitment | Digest of the **plaintext**, computed client-side, for integrity checking |
+| `version` | integer, 1 to 10000, default 1 | Client-managed version counter |
+| `ciphertext` | base64 | Encrypted artifact |
+| `nonce` | base64 | Encryption nonce |
+
+Returns `201 { artifact }`.
+
+### `POST /api/v1/mandates/:id/submissions`
+
+Bearer, awarded operator only. Anchors a workroom artifact as the deliverable and moves the mandate from `in_execution` to `submitted`.
+
+| Field | Type |
+| --- | --- |
+| `artifactId` | id of an artifact in this workroom |
+| `submissionCommitment` | commitment binding the submission to the mandate |
+| `digest` | digest of the submitted plaintext |
+
+```json
+{
+  "submission": {
+    "id": "sub_Qr4m...",
+    "mandateId": "man_cIsg...",
+    "artifactId": "art_8Zx2...",
+    "submissionCommitment": "5cc1...",
+    "digest": "d19f...",
+    "submittedAt": 1785289950000
+  },
+  "state": "submitted"
+}
+```
+
+Errors: `403 FORBIDDEN` for anyone but the awarded operator, `404 NOT_FOUND` if the artifact is not in this workroom, `409 INVALID_STATE` outside `in_execution`.
+
+---
+
+## Evaluations
+
+### `POST /api/v1/mandates/:id/evaluations`
+
+Bearer. Requires the mandate to be `submitted`. Authority follows the covenant: if the mandate designates an `evaluatorKey`, only that key may evaluate; otherwise evaluation is principal-led and only the principal may evaluate.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `verdict` | `accept` \| `reject` \| `revise` | Drives the state machine |
+| `evaluationCommitment` | commitment | Binds the private evaluation notes, which never reach the server |
+| `attestation` | string, 8 to 10000 | The evaluator's signed attestation blob, opaque to the server |
+
+| Verdict | Resulting state |
+| --- | --- |
+| `accept` | `accepted` (settlement may now be released) |
+| `revise` | `in_execution` (the operator iterates and submits again) |
+| `reject` | unchanged; the attestation is recorded and the parties may dispute or run another round if the covenant allows |
+
+```json
+{
+  "evaluation": {
+    "id": "evl_2Nb7...",
+    "mandateId": "man_cIsg...",
+    "evaluatorKey": "85ef9b03...affee",
+    "verdict": "accept",
+    "evaluationCommitment": "7ab0...",
+    "attestation": "base64-signed-attestation",
+    "createdAt": 1785289960000
+  },
+  "state": "accepted"
+}
+```
+
+Errors: `403 FORBIDDEN` for the wrong evaluator, `409 INVALID_STATE` if the mandate is not `submitted`.
+
+---
+
+## Vault
+
+### `POST /api/v1/mandates/:id/settle`
+
+Bearer, principal only. Legal from `accepted`. Consumes a settlement nullifier so the payout can happen exactly once, and auto-issues proof receipts.
+
+| Field | Type | Notes |
+| --- | --- | --- |
+| `settlementNullifier` | commitment, globally unique | Guarantees exactly-once settlement |
+| `amountCommitment` | commitment, optional | A commitment to the amount, never the amount |
+
+```json
+{
+  "settlement": {
+    "mandateId": "man_cIsg...",
+    "settlementNullifier": "s3tt...",
+    "amountCommitment": "amt0...",
+    "settledAt": 1785289970000
+  },
+  "state": "settled",
+  "receipts": [
+    { "id": "rcp_9pQ2...", "mandateId": "man_cIsg...", "holderKey": "7c1d...9a4b", "kind": "completion", "receiptCommitment": "0f3c...", "issuedAt": 1785289970000 },
+    { "id": "rcp_1aB3...", "mandateId": "man_cIsg...", "holderKey": "85ef9b03...affee", "kind": "payment", "receiptCommitment": "b77e...", "issuedAt": 1785289970000 }
+  ]
+}
+```
+
+The awarded operator receives a `completion` receipt (which is what advances their passport's completion band) and the principal a `payment` receipt.
+
+Errors: `403 FORBIDDEN` for a non-principal, `409 SETTLEMENT_FROZEN` while a dispute is open, `409 ALREADY_SETTLED`, `409 DUPLICATE_NULLIFIER` on nullifier reuse, `409 INVALID_STATE` outside `accepted`.
+
+### `GET /api/v1/vault/:mandateId`
+
+Bearer, mandate party only. Non-parties receive `404 NOT_FOUND`.
+
+```json
+{
+  "vault": {
+    "mandateId": "man_cIsg...",
+    "state": "settled",
+    "disputeOpen": false,
+    "settlement": {
+      "settlementNullifier": "s3tt...",
+      "amountCommitment": "amt0...",
+      "settledAt": 1785289970000
+    }
+  }
+}
+```
+
+`settlement` is `null` before settlement.
+
+---
+
+## Disputes
+
+### `POST /api/v1/mandates/:id/disputes`
+
+Bearer, principal or awarded operator only. Legal from `awarded`, `in_execution`, `submitted`, or `accepted`. Moves the mandate to `disputed`, which freezes settlement.
+
+Body: `{ "disputeCommitment": "..." }`, a commitment to the evidence capsule. The capsule itself stays with the parties.
+
+```json
+{
+  "dispute": {
+    "id": "dsp_5Tg9...",
+    "mandateId": "man_cIsg...",
+    "openedBy": "7c1d...9a4b",
+    "disputeCommitment": "ev1d...",
+    "status": "open",
+    "rulingCommitment": null,
+    "outcome": null,
+    "ruledAt": null,
+    "createdAt": 1785289980000
+  },
+  "state": "disputed"
+}
+```
+
+Errors: `403 FORBIDDEN` for evaluators and outsiders, `409 INVALID_STATE` from a state where a dispute is not possible.
+
+### `POST /api/v1/disputes/:id/ruling`
+
+Bearer, tribunal only. The tribunal is the mandate's designated evaluator, or any key listed in the `TRIBUNAL_KEYS` allowlist. Moves the mandate from `disputed` to `resolved`.
+
+| Field | Type |
+| --- | --- |
+| `rulingCommitment` | commitment to the ruling |
+| `outcome` | `release` \| `refund` |
+
+Returns `200 { dispute, state }` with `status: "ruled"`, the outcome, and `ruledAt` set.
+
+Errors: `404 NOT_FOUND` for an unknown dispute, `403 FORBIDDEN` without tribunal authority, `409 ALREADY_RULED`, `409 INVALID_STATE`.
+
+### `GET /api/v1/disputes`
+
+Bearer. Returns `{ items: [...] }` scoped to the caller: disputes they opened, or that belong to a mandate where they are the principal, the awarded operator, or the evaluator. There is no unscoped listing.
+
+---
+
+## Health and operations
+
+| Route | Response |
+| --- | --- |
+| `GET /healthz` | `200 { "status": "ok" }` |
+| `GET /readyz` | `200 { "status": "ready" }`, or `503 { "error": { "code": "NOT_READY", ... } }` if the database does not answer `SELECT 1` |
+| `GET /metrics` | `200 { startedAt, uptimeSeconds, requests, errors, modules: { <module>: { requests, errors } } }` |
+| `GET /docs` | Swagger UI |
+| `GET /docs/json` | OpenAPI 3 document generated from the zod schemas |
+
+`errors` counts responses with status 500 or above. Module buckets are derived from the request path: `health`, `auth` (including `/me`), `mandates`, `bids`, `workrooms`, `evaluations`, `vault`, `disputes`, `passports`, or `other`.
