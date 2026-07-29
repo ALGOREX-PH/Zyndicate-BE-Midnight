@@ -148,3 +148,57 @@ All application routes are served under `/api/v1`. Health and documentation rout
 | GET | `/api/v1/disputes` | Bearer | Disputes the caller participates in |
 
 Detailed request and response shapes, the error envelope, and a full lifecycle walkthrough live in [`docs/api.md`](docs/api.md).
+
+---
+
+## Mandate state machine
+
+`TRANSITIONS` in `src/modules/mandates/service.ts` is the single source of truth. Every write path calls `applyTransition`, which rejects an illegal move with `409 INVALID_STATE` and reports the states the action would have been legal from.
+
+```mermaid
+stateDiagram-v2
+    [*] --> draft
+    draft --> open_for_bids: open_bidding
+    open_for_bids --> bidding_closed: close_bidding
+    draft --> cancelled: cancel
+    open_for_bids --> cancelled: cancel
+    bidding_closed --> cancelled: cancel
+    open_for_bids --> awarded: award
+    bidding_closed --> awarded: award
+    awarded --> in_execution: accept_award
+    in_execution --> submitted: submit
+    submitted --> accepted: evaluation_accept
+    submitted --> in_execution: evaluation_revise
+    accepted --> settled: settle
+    awarded --> disputed: dispute
+    in_execution --> disputed: dispute
+    submitted --> disputed: dispute
+    accepted --> disputed: dispute
+    disputed --> resolved: resolve
+    settled --> [*]
+    cancelled --> [*]
+    resolved --> [*]
+```
+
+| Action | Legal from | To | Triggered by |
+| --- | --- | --- | --- |
+| `open_bidding` | `draft` | `open_for_bids` | Principal, `POST /mandates/:id/state` |
+| `close_bidding` | `open_for_bids` | `bidding_closed` | Principal, `POST /mandates/:id/state` |
+| `cancel` | `draft`, `open_for_bids`, `bidding_closed` | `cancelled` | Principal, `POST /mandates/:id/state` |
+| `award` | `open_for_bids`, `bidding_closed` | `awarded` | Principal, `POST /mandates/:id/award` |
+| `accept_award` | `awarded` | `in_execution` | Awarded operator, `POST /mandates/:id/accept` |
+| `submit` | `in_execution` | `submitted` | Awarded operator, `POST /mandates/:id/submissions` |
+| `evaluation_accept` | `submitted` | `accepted` | Evaluator, verdict `accept` |
+| `evaluation_revise` | `submitted` | `in_execution` | Evaluator, verdict `revise` |
+| `settle` | `accepted` | `settled` | Principal, `POST /mandates/:id/settle` |
+| `dispute` | `awarded`, `in_execution`, `submitted`, `accepted` | `disputed` | Principal or awarded operator, `POST /mandates/:id/disputes` |
+| `resolve` | `disputed` | `resolved` | Tribunal, `POST /disputes/:id/ruling` |
+
+Rules that ride alongside the machine:
+
+- Sealed bids are accepted only in `open_for_bids`, and only before `bidDeadline` if one is set. A late bid is `409 BID_WINDOW_CLOSED`.
+- A principal cannot bid on their own mandate, and an operator may hold only one pending bid per mandate.
+- Awarding one bid moves every other pending bid on that mandate to `rejected`.
+- A `reject` verdict is recorded as an attestation without changing state: the covenant may allow another round, or a party may open a dispute.
+- Settlement is frozen while a dispute is open, refuses a second settlement (`409 ALREADY_SETTLED`), and refuses a reused settlement nullifier (`409 DUPLICATE_NULLIFIER`).
+- `settled`, `cancelled`, and `resolved` are terminal.
