@@ -24,7 +24,12 @@ export async function registerSecurity(app: FastifyInstance, env: Env): Promise<
   await app.register(helmet);
 
   await app.register(cors, {
-    origin: env.corsOrigins,
+    // Same-origin and non-browser callers send no Origin header; only a
+    // browser origin that is not on the allowlist is rejected.
+    origin: (origin, callback) => {
+      if (!origin || originAllowed(origin, env.corsOrigins)) return callback(null, true);
+      callback(null, false);
+    },
     credentials: true
   });
 
