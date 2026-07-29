@@ -38,3 +38,70 @@ This service is **not trusted with the content of the work**. That is a constrai
 - **Log redaction.** Pino redacts `authorization`, `cookie`, and every `ciphertext` / `nonce` / `signature` / `token` / `encryptedBid` / `encryptedPackage` path, so opaque payloads never reach log aggregation as traffic metadata.
 
 Losing this database leaks the shape of the market - how many mandates, in which domains, at what coarse complexity - and nothing about the work itself.
+
+---
+
+## Architecture
+
+Fastify 5 on Node 22, TypeScript ESM (`NodeNext`, strict, `noUncheckedIndexedAccess`), Drizzle ORM over better-sqlite3, zod schemas shared between validation and the generated OpenAPI document.
+
+Each module is a thin trio: `routes.ts` (HTTP surface, auth preHandlers, access checks), `schemas.ts` (zod request contracts), `service.ts` (state machine, queries, invariants). Routes never touch the database directly except the single-query receipts module.
+
+```
+src/
+  app.ts                 buildApp(): plugin + module wiring, /api/v1 prefix, onClose teardown
+  index.ts               process entrypoint: loads .env, listens on PORT, SIGINT/SIGTERM shutdown
+  types.ts               Fastify decorator typings (env, db, sqlite, metrics, discoveryCache)
+  config/
+    env.ts               zod-validated environment, CORS/tribunal list parsing, prod secret guard
+  db/
+    schema.ts            Drizzle table definitions + state/verdict/status unions
+    client.ts            better-sqlite3 open, WAL, foreign keys, idempotent DDL on boot
+  lib/
+    cache.ts             LRU+TTL cache for public discovery listings
+    crypto.ts            ed25519 challenge verification, nonce generation, sha256 helper
+    errors.ts            ApiError + badRequest/unauthorized/forbidden/notFound/conflict/invalidState
+    ids.ts               prefixed nanoid identifiers (man_, bid_, msg_, art_, sub_, evl_, dsp_, rcp_, crd_)
+    logger.ts            pino options with redaction paths
+    metrics.ts           in-memory request/error counters, per-module buckets
+    pagination.ts        page/pageSize query schema and Paginated<T> envelope
+  plugins/
+    auth.ts              JWT sign/verify, `authenticate` and `optionalAuthenticate` preHandlers
+    error-handler.ts     { error: { code, message, details? } } envelope + 404 fallback
+    security.ts          helmet, CORS allowlist, global rate limit
+    swagger.ts           OpenAPI document + Swagger UI at /docs
+  modules/
+    auth/                challenge, verify, identity read/update
+    passports/           public coarse passport, credential commitments
+    mandates/            create, discover, role-aware detail, state machine, award, accept
+    bids/                sealed bid submit, scoped listing, withdraw
+    workrooms/           encrypted messages, artifacts, submission commit
+    evaluations/         attestation recording and verdict-driven transitions
+    vault/               exactly-once settlement, receipt issuance, vault status
+    disputes/            open, tribunal ruling, caller-scoped listing
+    receipts/            proof receipts held by the caller
+    health/              /healthz, /readyz, /metrics
+test/                    10 vitest files, each building an isolated in-memory app
+```
+
+## Data model
+
+Thirteen SQLite tables, created idempotently on boot (`src/db/client.ts`).
+
+| Table | Purpose |
+| --- | --- |
+| `identities` | One row per ed25519 public key: optional display name, self-declared role hints, first-seen timestamp |
+| `auth_challenges` | Short-lived signing nonces with expiry and single-use consumption marker |
+| `mandates` | Public Class A summary, both commitments, the encrypted mandate package, discovery mode, state, deadlines, optional evaluator |
+| `bids` | Sealed bids: unique commitment and unique nullifier, ciphertext blob, status, owning operator |
+| `awards` | One row per awarded mandate: winning bid, award time, operator acceptance time |
+| `workroom_messages` | Client-encrypted workroom messages with sender key and nonce |
+| `workroom_artifacts` | Client-encrypted artifacts with display name, plaintext digest, and version |
+| `submissions` | Submission commitment binding an artifact digest to the mandate |
+| `evaluations` | Verdict, evaluation-notes commitment, and the evaluator's opaque signed attestation |
+| `settlements` | One row per settled mandate, guarded by a unique settlement nullifier, optional amount commitment |
+| `disputes` | Evidence-capsule commitment, open/ruled status, ruling commitment and release/refund outcome |
+| `receipts` | Proof receipts (completion, payment, evaluation) held by a public key |
+| `credentials` | Passport credential commitments by domain and kind, with optional revocation timestamp |
+
+Indexes cover mandate state/domain/principal, bids by mandate and operator, workroom rows by mandate, submissions and evaluations and disputes by mandate, receipts by holder, and credentials by passport.
