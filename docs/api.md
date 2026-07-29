@@ -680,3 +680,310 @@ Bearer. Returns `{ items: [...] }` scoped to the caller: disputes they opened, o
 | `GET /docs/json` | OpenAPI 3 document generated from the zod schemas |
 
 `errors` counts responses with status 500 or above. Module buckets are derived from the request path: `health`, `auth` (including `/me`), `mandates`, `bids`, `workrooms`, `evaluations`, `vault`, `disputes`, `passports`, or `other`.
+
+---
+
+## End-to-end lifecycle
+
+A complete mandate, from creation to settlement, against a locally running service. Two actors: a principal and an operator. This mandate designates no evaluator, so evaluation is principal-led. Responses below are trimmed to the fields that matter at each step.
+
+Requires `curl`, `jq`, and `node` (for ed25519 signing, which curl cannot do).
+
+### Setup
+
+```bash
+BASE=http://localhost:4000/api/v1
+```
+
+Save this signing helper as `sign.mjs` in a directory where `@noble/curves` resolves (the repo root works):
+
+```js
+// node sign.mjs <privateKeyHex> <nonce>
+import { ed25519 } from "@noble/curves/ed25519";
+const [priv, nonce] = process.argv.slice(2);
+const msg = Buffer.from(`zyndicate:auth:${nonce}`, "utf8");
+process.stdout.write(Buffer.from(ed25519.sign(msg, Buffer.from(priv, "hex"))).toString("hex"));
+```
+
+Generate a key pair per actor:
+
+```bash
+node -e 'import("@noble/curves/ed25519").then(({ed25519})=>{const k=ed25519.utils.randomPrivateKey();console.log("PRIV="+Buffer.from(k).toString("hex"));console.log("PUB="+Buffer.from(ed25519.getPublicKey(k)).toString("hex"));})'
+```
+
+Export the results as `P_PRIV` / `P_PUB` for the principal and `O_PRIV` / `O_PUB` for the operator.
+
+### 1. Both actors authenticate
+
+```bash
+NONCE=$(curl -s -X POST $BASE/auth/challenge \
+  -H 'content-type: application/json' \
+  -d "{\"publicKey\":\"$P_PUB\"}" | jq -r .nonce)
+
+SIG=$(node sign.mjs "$P_PRIV" "$NONCE")
+
+P_TOKEN=$(curl -s -X POST $BASE/auth/verify \
+  -H 'content-type: application/json' \
+  -d "{\"publicKey\":\"$P_PUB\",\"nonce\":\"$NONCE\",\"signature\":\"$SIG\"}" | jq -r .token)
+```
+
+Repeat with `O_PUB` / `O_PRIV` to obtain `O_TOKEN`.
+
+### 2. Principal creates the mandate
+
+The encrypted package is produced client-side. Commitments are computed client-side too; the values below stand in for real ones.
+
+```bash
+MANDATE=$(curl -s -X POST $BASE/mandates \
+  -H "authorization: Bearer $P_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{
+    "publicDomain": "security",
+    "complexityBand": "high",
+    "discoveryMode": "open",
+    "bidDeadline": "2026-08-05T00:00:00.000Z",
+    "mandateCommitment": "9f2a4c81be07d5aa",
+    "covenantCommitment": "41bd0e77c3a91b6d",
+    "encryptedPackage": { "ciphertext": "T25seSB0aGUgcHJpbmNpcGFsIGNhbiByZWFkIHRoaXM=", "nonce": "bm9uY2UtMDAx" },
+    "rewardBand": "band-3"
+  }' | jq -r .mandate.id)
+```
+
+```json
+{ "mandate": { "id": "man_iXv2vi6kpaOzShtYI6QoA", "state": "draft", "viewerRole": "principal", "...": "..." } }
+```
+
+### 3. Principal opens bidding
+
+```bash
+curl -s -X POST $BASE/mandates/$MANDATE/state \
+  -H "authorization: Bearer $P_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"action":"open_bidding"}'
+```
+
+```json
+{ "mandate": { "state": "open_for_bids", "...": "..." } }
+```
+
+The mandate is now discoverable. An anonymous caller sees the Class A summary and nothing else:
+
+```bash
+curl -s "$BASE/mandates?domain=security&pageSize=3" | jq '.total, .items[0].state'
+curl -s $BASE/mandates/$MANDATE | jq '.mandate.viewerRole, .mandate.encryptedPackage'
+```
+
+```
+1
+"open_for_bids"
+null
+null
+```
+
+`viewerRole` is `null` and `encryptedPackage` is absent for outsiders.
+
+### 4. Operator submits a sealed bid
+
+```bash
+BID=$(curl -s -X POST $BASE/mandates/$MANDATE/bids \
+  -H "authorization: Bearer $O_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{
+    "bidCommitment": "b1d0c0mm17m3n7",
+    "bidNullifier": "n0ll1f13r0001",
+    "encryptedBid": { "ciphertext": "U2VhbGVkIGJpZCBib2R5", "nonce": "bm9uY2UtMDAy" }
+  }' | jq -r .bid.id)
+```
+
+```json
+{ "bid": { "id": "bid_qAhkmqFyMyo-xoZatSBfY", "status": "pending", "...": "..." } }
+```
+
+A second pending bid from the same operator returns `409 DUPLICATE_BID`; reusing the nullifier returns `409 DUPLICATE_NULLIFIER`.
+
+### 5. Principal reviews and awards
+
+```bash
+curl -s $BASE/mandates/$MANDATE/bids -H "authorization: Bearer $P_TOKEN" | jq '.items | length'
+
+curl -s -X POST $BASE/mandates/$MANDATE/award \
+  -H "authorization: Bearer $P_TOKEN" \
+  -H 'content-type: application/json' \
+  -d "{\"bidId\":\"$BID\"}"
+```
+
+```json
+{ "mandate": { "state": "awarded", "awardedBidId": "bid_qAhkmqFyMyo-xoZatSBfY", "...": "..." } }
+```
+
+Bid ciphertexts are decrypted in the principal's client; the server only ever moved sealed blobs.
+
+### 6. Operator accepts; the workroom opens
+
+```bash
+curl -s -X POST $BASE/mandates/$MANDATE/accept -H "authorization: Bearer $O_TOKEN"
+curl -s $BASE/workrooms/$MANDATE -H "authorization: Bearer $O_TOKEN"
+```
+
+```json
+{ "mandate": { "state": "in_execution", "...": "..." } }
+```
+
+```json
+{
+  "workroom": {
+    "mandateId": "man_iXv2vi6kpaOzShtYI6QoA",
+    "state": "in_execution",
+    "createdAt": 1785290309000,
+    "members": [
+      { "publicKey": "49e15bee...4203", "role": "principal" },
+      { "publicKey": "0aef0424...1062", "role": "operator" }
+    ]
+  }
+}
+```
+
+Any non-member calling the same route receives `404 NOT_FOUND`.
+
+### 7. Execution: encrypted messages and artifacts
+
+```bash
+curl -s -X POST $BASE/workrooms/$MANDATE/messages \
+  -H "authorization: Bearer $O_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"ciphertext":"RW5jcnlwdGVkIHN0YXR1cyB1cGRhdGU=","nonce":"bm9uY2UtMDAz"}'
+
+ARTIFACT=$(curl -s -X POST $BASE/workrooms/$MANDATE/artifacts \
+  -H "authorization: Bearer $O_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{
+    "name": "audit-report.pdf.enc",
+    "digest": "d19f7c0aa3b25e41",
+    "version": 1,
+    "ciphertext": "RW5jcnlwdGVkIGRlbGl2ZXJhYmxl",
+    "nonce": "bm9uY2UtMDA0"
+  }' | jq -r .artifact.id)
+```
+
+### 8. Operator commits the submission
+
+```bash
+curl -s -X POST $BASE/mandates/$MANDATE/submissions \
+  -H "authorization: Bearer $O_TOKEN" \
+  -H 'content-type: application/json' \
+  -d "{\"artifactId\":\"$ARTIFACT\",\"submissionCommitment\":\"5cc1a20f9e33\",\"digest\":\"d19f7c0aa3b25e41\"}"
+```
+
+```json
+{ "submission": { "id": "sub_Qr4m...", "artifactId": "art_jCd3EvmWZgHpdQQYy3mip", "...": "..." }, "state": "submitted" }
+```
+
+### 9. Evaluation
+
+No evaluator was designated, so the principal evaluates.
+
+```bash
+curl -s -X POST $BASE/mandates/$MANDATE/evaluations \
+  -H "authorization: Bearer $P_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{
+    "verdict": "accept",
+    "evaluationCommitment": "7ab04f1c9d20",
+    "attestation": "c2lnbmVkLWF0dGVzdGF0aW9uLWJsb2I="
+  }'
+```
+
+```json
+{ "evaluation": { "verdict": "accept", "...": "..." }, "state": "accepted" }
+```
+
+A `revise` verdict would return the mandate to `in_execution` for another round instead.
+
+### 10. Settlement
+
+```bash
+curl -s -X POST $BASE/mandates/$MANDATE/settle \
+  -H "authorization: Bearer $P_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"settlementNullifier":"s3tt13m3nt0001","amountCommitment":"amt0c0mm17"}'
+```
+
+```json
+{
+  "settlement": { "mandateId": "man_iXv2...", "settlementNullifier": "s3tt13m3nt0001", "amountCommitment": "amt0c0mm17", "settledAt": 1785290309850 },
+  "state": "settled",
+  "receipts": [
+    { "id": "rcp_W0hv...", "kind": "completion", "holderKey": "0aef0424...1062", "...": "..." },
+    { "id": "rcp_1aB3...", "kind": "payment", "holderKey": "49e15bee...4203", "...": "..." }
+  ]
+}
+```
+
+Calling settle again returns `409 ALREADY_SETTLED`, and a reused nullifier returns `409 DUPLICATE_NULLIFIER`. The amount itself was never sent to the server.
+
+### 11. Receipts and reputation
+
+```bash
+curl -s $BASE/me/receipts -H "authorization: Bearer $O_TOKEN" | jq '.items[0].kind'
+curl -s $BASE/passports/$O_PUB | jq
+```
+
+```
+"completion"
+```
+
+```json
+{
+  "passport": {
+    "publicKey": "0aef0424...1062",
+    "identityClass": "registered",
+    "domains": [],
+    "completionBand": "emerging",
+    "activeSince": 1785290309802
+  }
+}
+```
+
+The completion receipt advanced the operator's band from `none` to `emerging`. Registering a credential commitment adds the domain and promotes `identityClass`:
+
+```bash
+curl -s -X POST $BASE/passports/credentials \
+  -H "authorization: Bearer $O_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"domain":"security","kind":"capability","commitment":"c0mm17m3nt2024"}'
+
+curl -s $BASE/passports/$O_PUB | jq '.passport.identityClass, .passport.domains'
+```
+
+```
+"credentialed_operator"
+[ "security" ]
+```
+
+The passport shows a band and a domain list. It never shows who the counterparty was, what the mandate contained, or what was paid.
+
+### Dispute variant
+
+Instead of settling, either party may open a dispute from `awarded`, `in_execution`, `submitted`, or `accepted`:
+
+```bash
+DISPUTE=$(curl -s -X POST $BASE/mandates/$MANDATE/disputes \
+  -H "authorization: Bearer $O_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"disputeCommitment":"ev1d3nc3caps013"}' | jq -r .dispute.id)
+```
+
+The mandate moves to `disputed` and settlement returns `409 SETTLEMENT_FROZEN`. The tribunal (the designated evaluator, or a key in `TRIBUNAL_KEYS`) rules:
+
+```bash
+curl -s -X POST $BASE/disputes/$DISPUTE/ruling \
+  -H "authorization: Bearer $T_TOKEN" \
+  -H 'content-type: application/json' \
+  -d '{"rulingCommitment":"r0l1ngc0mm17","outcome":"release"}'
+```
+
+```json
+{ "dispute": { "status": "ruled", "outcome": "release", "ruledAt": 1785290400000, "...": "..." }, "state": "resolved" }
+```
+
+The tribunal ruled on a commitment to an evidence capsule it received out of band. The coordination service recorded that a ruling happened, and never saw what it was about.
