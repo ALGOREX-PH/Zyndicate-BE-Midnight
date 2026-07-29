@@ -218,3 +218,56 @@ Rules that ride alongside the machine:
 - **Nullifier uniqueness.** Bid nullifiers, bid commitments, and settlement nullifiers are unique at the database level, so replay and double settlement fail closed even under concurrency.
 - **Body limit and strict validation.** A 2 MB body limit, and every request is parsed by a zod schema before a handler runs. Public keys must be 64 hex characters, signatures 128, and encrypted payloads must be base64.
 - **Foreign keys and WAL.** SQLite runs with `foreign_keys = ON` and write-ahead logging.
+
+---
+
+## Setup
+
+Requires Node 22 or newer (the service uses the built-in `process.loadEnvFile`, and better-sqlite3 ships prebuilt binaries for current LTS).
+
+```bash
+git clone https://github.com/ALGOREX-PH/Zyndicate-BE-Midnight.git
+cd Zyndicate-BE-Midnight
+npm install
+cp .env.example .env      # then set JWT_SECRET to a long random value
+npm run dev
+```
+
+The service listens on `http://localhost:4000` by default. Swagger UI is at `/docs`, the OpenAPI document at `/docs/json`. The SQLite file and its parent directory are created on first boot, and the schema is applied idempotently, so there is no separate migration step.
+
+`.env` is gitignored and loaded at startup by `src/index.ts`. Variables already present in the real process environment always win over the file, so containers and CI can inject secrets normally. Set `ENV_FILE` to load a different file.
+
+### Environment variables
+
+| Variable | Default | Purpose |
+| --- | --- | --- |
+| `NODE_ENV` | `development` | `development`, `test`, or `production`. Production refuses the built-in development JWT secret |
+| `PORT` | `4000` | HTTP listen port (binds `0.0.0.0`) |
+| `LOG_LEVEL` | `info` | pino level: `fatal`, `error`, `warn`, `info`, `debug`, `trace`, or `silent` |
+| `JWT_SECRET` | development-only fallback | HMAC secret for session tokens, minimum 16 characters. Must be set in production |
+| `CORS_ORIGINS` | `http://localhost:5173` | Comma-separated browser origin allowlist |
+| `DATABASE_PATH` | `./data/zyndicate.db` | SQLite file path; `:memory:` for ephemeral instances (used by the test suite) |
+| `RATE_LIMIT_MAX` | `120` | Global requests per window, per client |
+| `RATE_LIMIT_WINDOW` | `1 minute` | Rate limit window |
+| `RATE_LIMIT_AUTH_MAX` | `10` | Requests per window for `/auth/challenge` and `/auth/verify` |
+| `TRIBUNAL_KEYS` | empty | Comma-separated ed25519 public keys allowed to rule disputes in addition to the mandate evaluator |
+| `ENV_FILE` | `.env` | Optional alternative dotenv path loaded at startup |
+
+### Scripts
+
+| Script | Command | What it does |
+| --- | --- | --- |
+| `npm run dev` | `tsx watch src/index.ts` | Development server with reload on change |
+| `npm run build` | `tsc -p tsconfig.build.json` | Compile TypeScript to `dist/` |
+| `npm start` | `node dist/index.js` | Run the compiled build |
+| `npm test` | `vitest run` | Full suite: 56 tests across 10 files, each with an isolated in-memory database |
+| `npm run typecheck` | `tsc --noEmit` | Type check sources and tests without emitting |
+| `npm run lint` | `eslint .` | ESLint with typescript-eslint recommended rules |
+
+### Tests
+
+Ten files covering auth, mandates, bids, workrooms, evaluations, vault, disputes, passports, health, and one end-to-end lifecycle test that drives a mandate from draft through settlement. Every file builds its own app against `:memory:` with silent logging, so the suite is order-independent and runs in parallel.
+
+```bash
+npm test
+```
