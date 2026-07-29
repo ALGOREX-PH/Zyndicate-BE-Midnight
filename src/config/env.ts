@@ -18,10 +18,23 @@ const envSchema = z.object({
   RATE_LIMIT_MAX: z.coerce.number().int().positive().default(120),
   RATE_LIMIT_WINDOW: z.string().default("1 minute"),
   RATE_LIMIT_AUTH_MAX: z.coerce.number().int().positive().default(10),
-  TRIBUNAL_KEYS: z.string().default("")
+  TRIBUNAL_KEYS: z.string().default(""),
+  /**
+   * Trust `X-Forwarded-*` headers. Required behind a managed load balancer
+   * (Render, Fly, a reverse proxy): without it every request carries the
+   * proxy's IP, so rate limiting collapses into one shared bucket for all
+   * callers. Defaults on in production, off elsewhere so local runs and tests
+   * cannot be spoofed by a forged header.
+   */
+  TRUST_PROXY: z
+    .enum(["true", "false"])
+    .optional()
+    .transform((value) => value === undefined ? undefined : value === "true")
 });
 
 export type Env = z.infer<typeof envSchema> & {
+  /** Resolved from TRUST_PROXY, defaulting to true in production. */
+  trustProxy: boolean;
   corsOrigins: string[];
   tribunalKeys: string[];
 };
@@ -39,6 +52,7 @@ export function loadEnv(overrides: Partial<Record<string, string>> = {}): Env {
   }
   return {
     ...parsed,
+    trustProxy: parsed.TRUST_PROXY ?? parsed.NODE_ENV === "production",
     corsOrigins: parsed.CORS_ORIGINS.split(",")
       .map((origin) => origin.trim())
       .filter((origin) => origin.length > 0),
