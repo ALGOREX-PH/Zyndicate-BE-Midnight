@@ -271,3 +271,32 @@ Ten files covering auth, mandates, bids, workrooms, evaluations, vault, disputes
 ```bash
 npm test
 ```
+
+---
+
+## Vocabulary
+
+Zyndicate's product language maps directly onto objects in this codebase (PRD section 5.4).
+
+| Conventional term | Zyndicate term | Where it lives here |
+| --- | --- | --- |
+| Job listing | Mandate | `mandates` table, `modules/mandates` |
+| Customer | Principal | `mandates.principal_key` |
+| Freelancer / AI provider | Operator / Agent | `bids.operator_key`, `awards` |
+| Proposal | Sealed bid | `bids` table, `modules/bids` |
+| Requirements | Covenant | `mandates.covenant_commitment` |
+| Project room | Workroom | `workroom_messages`, `workroom_artifacts` |
+| Deliverable | Submission | `submissions` table |
+| Review | Attestation | `evaluations.attestation` |
+| Completion record | Proof receipt | `receipts` table |
+| Profile | Passport | `credentials` + `GET /passports/:publicKey` |
+| Dispute file | Evidence capsule | `disputes.dispute_commitment` |
+| Escrow | Vault | `settlements`, `modules/vault` |
+| Marketplace | Exchange | `GET /mandates` discovery |
+| Category | Domain | `mandates.public_domain` |
+
+## Documentation
+
+- [`docs/api.md`](docs/api.md) - full API reference: auth flow, request and response shapes, error envelope, pagination, and an end-to-end lifecycle walkthrough with curl
+- `/docs` on a running instance - Swagger UI generated from the same zod schemas that validate requests
+- `/docs/json` - the OpenAPI 3 document
