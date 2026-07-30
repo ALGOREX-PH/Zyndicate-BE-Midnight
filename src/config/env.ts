@@ -31,9 +31,9 @@ const envSchema = z.object({
   JWT_SECRET: z.string().min(16).default(DEV_JWT_SECRET),
   CORS_ORIGINS: z.string().default("http://localhost:5173"),
   DATABASE_PATH: z.string().default("./data/zyndicate.db"),
-  RATE_LIMIT_MAX: z.coerce.number().int().positive().default(120),
+  RATE_LIMIT_MAX: numericEnv(120),
   RATE_LIMIT_WINDOW: z.string().default("1 minute"),
-  RATE_LIMIT_AUTH_MAX: z.coerce.number().int().positive().default(10),
+  RATE_LIMIT_AUTH_MAX: numericEnv(10),
   TRIBUNAL_KEYS: z.string().default(""),
   /**
    * Trust `X-Forwarded-*` headers. Required behind a managed load balancer
