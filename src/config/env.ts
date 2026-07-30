@@ -6,9 +6,25 @@ import { z } from "zod";
  */
 export const DEV_JWT_SECRET = "zyndicate-dev-secret-do-not-use-in-production";
 
+/**
+ * A numeric env var that falls back to its default when the raw value is
+ * absent, blank, or not a number at all (e.g. a stray "NaN" left behind in a
+ * hosting dashboard) instead of crash-looping the process. A value that
+ * parses as a number but fails a real constraint (negative, zero, non-integer)
+ * still fails loudly — that is a genuine misconfiguration, not noise.
+ */
+function numericEnv(fallback: number) {
+  return z.preprocess((value) => {
+    if (typeof value !== "string") return value;
+    const trimmed = value.trim();
+    if (trimmed === "") return undefined;
+    return Number.isFinite(Number(trimmed)) ? trimmed : undefined;
+  }, z.coerce.number().int().positive().default(fallback));
+}
+
 const envSchema = z.object({
   NODE_ENV: z.enum(["development", "test", "production"]).default("development"),
-  PORT: z.coerce.number().int().positive().default(4000),
+  PORT: numericEnv(4000),
   LOG_LEVEL: z
     .enum(["fatal", "error", "warn", "info", "debug", "trace", "silent"])
     .default("info"),
